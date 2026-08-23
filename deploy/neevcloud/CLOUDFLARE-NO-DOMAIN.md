@@ -109,8 +109,11 @@ curl -s -X POST "$(cat /var/log/aegis-tunnel.url)/pipeline/plan" \
 In the UI:
 
 - [ ] No `[DEMO]` in planner reasoning (live Gemini)
-- [ ] Hallucinated method case → **REJECTED**
+- [ ] Valid transfer → **APPROVED** → **WDK sign request** visible in Dispatch panel
+- [ ] Hallucinated method case → **REJECTED** → no WDK payload
 - [ ] Enable **Fast audit** if Pro audit feels slow (~60–80s)
+
+Optional WDK terminal demo: **[integrations/wdk/README.md](../../integrations/wdk/README.md)** — `AEGIS_API_URL=https://YOUR-TUNNEL npm run sign-approved`
 
 ---
 
