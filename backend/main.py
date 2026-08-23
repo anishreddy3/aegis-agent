@@ -14,7 +14,17 @@ from backend.agents.paranoid_agent import ParanoidAgent
 from backend.config import get_settings
 from backend.execution.web3_executor import Web3Executor
 from backend.rag.vector_store import VectorStore
-from backend.schemas import PipelineRequest, PipelineResponse
+from backend.schemas import (
+    PipelineRequest,
+    PipelineResponse,
+    StageAuditRequest,
+    StageAuditResponse,
+    StageExecuteRequest,
+    StageExecuteResponse,
+    StagePlanRequest,
+    StagePlanResponse,
+    TransactionProposal,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,9 +42,11 @@ web3_executor = Web3Executor(settings)
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     logger.info(
-        "AegisAgent API starting (demo_mode=%s, gemini=%s)",
+        "AegisAgent API starting (demo_mode=%s, gemini=%s, planner=%s, auditor=%s)",
         settings.demo_mode,
         settings.has_gemini,
+        settings.gemini_model,
+        settings.gemini_paranoid_model,
     )
     # Ensure fixtures are present
     if vector_store._collection is not None and vector_store._collection.count() == 0:
@@ -62,16 +74,92 @@ app.add_middleware(
 )
 
 
+def _resolve_fast_audit(*, fast_audit: bool = False, deep_audit: bool = False) -> bool:
+    """Legacy deep_audit=True implied Pro; fast_audit=True selects Flash."""
+    if fast_audit:
+        return True
+    if deep_audit:
+        return False
+    return False
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "demo_mode": settings.demo_mode,
         "gemini_configured": settings.has_gemini,
+        "planner_model": settings.gemini_model,
+        "paranoid_model": settings.gemini_paranoid_model,
+        "paranoid_fast_model": settings.gemini_paranoid_fast_model,
+        "paranoid_use_vllm": settings.paranoid_use_vllm,
         "execution_key_configured": settings.has_execution_key,
         "chain_id": settings.chain_id,
         "rpc_url": settings.rpc_url,
     }
+
+
+def _rag_query(proposal: TransactionProposal, user_query: str) -> str:
+    return (
+        f"{proposal.function_name} {proposal.target_contract} "
+        f"{user_query} ABI invariant slippage approve transfer"
+    )
+
+
+def _run_plan(query: str, *, force_demo: bool) -> TransactionProposal:
+    return execution_agent.generate_proposal(query, force_demo=force_demo)
+
+
+def _run_audit(
+    query: str,
+    proposal: TransactionProposal,
+    *,
+    force_demo: bool,
+    fast_audit: bool,
+):
+    rag_context = vector_store.query_specs(_rag_query(proposal, query), top_k=2)
+    audit = paranoid_agent.audit(
+        proposal,
+        rag_context,
+        force_demo=force_demo,
+        fast_audit=fast_audit,
+    )
+    return rag_context, audit
+
+
+@app.post("/pipeline/plan", response_model=StagePlanResponse)
+def pipeline_plan(body: StagePlanRequest) -> StagePlanResponse:
+    query = body.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query must not be empty")
+    logger.info("Pipeline stage=plan query=%r", query[:120])
+    proposal = _run_plan(query, force_demo=body.force_demo)
+    return StagePlanResponse(proposal=proposal)
+
+
+@app.post("/pipeline/audit", response_model=StageAuditResponse)
+def pipeline_audit(body: StageAuditRequest) -> StageAuditResponse:
+    query = body.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query must not be empty")
+    logger.info("Pipeline stage=audit function=%s", body.proposal.function_name)
+    rag_context, audit = _run_audit(
+        query,
+        body.proposal,
+        force_demo=body.force_demo,
+        fast_audit=_resolve_fast_audit(
+            fast_audit=body.fast_audit,
+            deep_audit=body.deep_audit,
+        ),
+    )
+    return StageAuditResponse(audit=audit, rag_context=rag_context)
+
+
+@app.post("/pipeline/execute", response_model=StageExecuteResponse)
+def pipeline_execute(body: StageExecuteRequest) -> StageExecuteResponse:
+    logger.info("Pipeline stage=execute function=%s", body.proposal.function_name)
+    execution = web3_executor.execute(body.proposal)
+    return StageExecuteResponse(execution=execution)
 
 
 @app.post("/evaluate-and-execute", response_model=PipelineResponse)
@@ -88,18 +176,17 @@ def evaluate_and_execute(body: PipelineRequest) -> PipelineResponse:
         raise HTTPException(status_code=400, detail="query must not be empty")
 
     force = body.force_demo
-    logger.info("Pipeline start query=%r force_demo=%s", query[:120], force)
+    fast = _resolve_fast_audit(fast_audit=body.fast_audit, deep_audit=body.deep_audit)
+    logger.info("Pipeline start query=%r force_demo=%s fast_audit=%s", query[:120], force, fast)
 
     try:
-        proposal = execution_agent.generate_proposal(query, force_demo=force)
-
-        rag_query = (
-            f"{proposal.function_name} {proposal.target_contract} "
-            f"{query} ABI invariant slippage approve transfer"
+        proposal = _run_plan(query, force_demo=force)
+        rag_context, audit = _run_audit(
+            query,
+            proposal,
+            force_demo=force,
+            fast_audit=fast,
         )
-        rag_context = vector_store.query_specs(rag_query, top_k=4)
-
-        audit = paranoid_agent.audit(proposal, rag_context, force_demo=force)
 
         if audit.status != "APPROVED":
             return PipelineResponse(

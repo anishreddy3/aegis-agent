@@ -1,0 +1,4 @@
+/*
+ * CORS note: configure your FastAPI CORS_ORIGINS to include your Pages domain.
+ * Example: https://aegis-agent.pages.dev
+ */

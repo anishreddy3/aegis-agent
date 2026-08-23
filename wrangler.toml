@@ -1,0 +1,10 @@
+# Cloudflare Pages — static observability UI
+# Python API: NeevCloud, Railway, Fly.io, Render, etc.
+
+name = "aegis-agent"
+pages_build_output_dir = "web"
+compatibility_date = "2024-08-01"
+
+[vars]
+# Set in Cloudflare dashboard: default API URL for production backend
+# AEGIS_DEFAULT_API = "https://your-api.example.com"

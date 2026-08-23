@@ -1,0 +1,26 @@
+# Cloudflare Tunnel — route public HTTPS to local FastAPI
+#
+# 1. cloudflared tunnel create aegis-api
+# 2. Copy this file to /etc/cloudflared/config.yml
+# 3. Replace TUNNEL_UUID and hostname
+# 4. cp ~/.cloudflared/TUNNEL_UUID.json /etc/cloudflared/
+#
+# Docs: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
+
+tunnel: TUNNEL_UUID
+credentials-file: /etc/cloudflared/TUNNEL_UUID.json
+
+# Optional: reduce log noise in production
+# loglevel: info
+
+ingress:
+  # Public API hostname (add DNS route in Cloudflare dashboard or CLI)
+  - hostname: api.yourdomain.com
+    service: http://127.0.0.1:8080
+    originRequest:
+      connectTimeout: 30s
+      # Pro audit can run 60–90s; increase if Cloudflare returns 524
+      noHappyEyeballs: false
+
+  # Catch-all (required as last rule)
+  - service: http_status:404

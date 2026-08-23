@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 import streamlit as st
 
 API_URL = os.getenv("AEGIS_API_URL", "http://localhost:8080")
+
+STAGE_LABELS = ["Planner", "RAG + Gatekeeper", "Dispatch"]
 
 DEMO_CASES = {
     "1 · Valid ERC-20 Transfer": (
@@ -25,14 +27,186 @@ DEMO_CASES = {
 }
 
 
-def call_pipeline(query: str, force_demo: bool = True) -> Dict[str, Any]:
-    resp = requests.post(
-        f"{API_URL}/evaluate-and-execute",
-        json={"query": query, "force_demo": force_demo},
-        timeout=90,
-    )
+def _post(api_url: str, path: str, payload: dict, *, timeout: int = 120) -> dict:
+    resp = requests.post(f"{api_url}{path}", json=payload, timeout=timeout)
     resp.raise_for_status()
     return resp.json()
+
+
+def render_stage_progress(messages: List[str], states: List[str]) -> None:
+    """Visual stepper: pending → running → done/skipped/error."""
+    cols = st.columns(len(STAGE_LABELS))
+    icons = {"pending": "○", "running": "▶", "done": "✓", "skipped": "—", "error": "✗"}
+
+    for i, col in enumerate(cols):
+        state = states[i] if i < len(states) else "pending"
+        icon = icons.get(state, "○")
+        label = STAGE_LABELS[i]
+        msg = messages[i] if i < len(messages) else "Waiting…"
+
+        styles = {
+            "pending": ("#6b7280", "#f3f4f6"),
+            "running": ("#1d4ed8", "#dbeafe"),
+            "done": ("#15803d", "#dcfce7"),
+            "skipped": ("#92400e", "#fef3c7"),
+            "error": ("#b91c1c", "#fee2e2"),
+        }
+        color, bg = styles.get(state, styles["pending"])
+        border = "2px solid #1d4ed8" if state == "running" else "1px solid rgba(120,120,140,0.25)"
+
+        col.markdown(
+            f"""
+            <div style="
+                border:{border};
+                border-radius:10px;
+                padding:0.65rem 0.75rem;
+                background:{bg};
+                min-height:88px;
+            ">
+              <div style="font-weight:700;color:{color};">{icon} Step {i + 1}: {label}</div>
+              <div style="font-size:0.85rem;margin-top:0.35rem;color:#374151;">{msg}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def _init_pipeline_run(
+    query: str,
+    *,
+    api: str,
+    force_demo: bool,
+    fast_audit: bool,
+) -> None:
+    st.session_state["pipeline_run"] = {
+        "active": True,
+        "stage": 0,
+        "query": query,
+        "api": api,
+        "force_demo": force_demo,
+        "fast_audit": fast_audit,
+        "messages": [
+            "Gemini Flash generating structured calldata…",
+            "Waiting for planner…",
+            "Waiting for gatekeeper…",
+        ],
+        "states": ["running", "pending", "pending"],
+        "proposal": None,
+        "audit": None,
+        "rag_context": [],
+        "execution": None,
+        "error": None,
+    }
+
+
+def _advance_pipeline() -> None:
+    run = st.session_state.get("pipeline_run")
+    if not run or not run.get("active"):
+        return
+
+    api = run["api"]
+    query = run["query"]
+    force_demo = run["force_demo"]
+    fast_audit = run["fast_audit"]
+    stage = run["stage"]
+
+    try:
+        if stage == 0:
+            plan = _post(api, "/pipeline/plan", {"query": query, "force_demo": force_demo})
+            run["proposal"] = plan["proposal"]
+            fn = run["proposal"].get("function_name", "—")
+            run["messages"][0] = f"Complete — proposed `{fn}`"
+            run["states"][0] = "done"
+            run["messages"][1] = (
+                "Retrieving ABIs + running adversarial audit…"
+                + (" (Flash)" if fast_audit else " (3.1 Pro)")
+            )
+            run["states"][1] = "running"
+            run["stage"] = 1
+            return
+
+        if stage == 1:
+            audit_resp = _post(
+                api,
+                "/pipeline/audit",
+                {
+                    "query": query,
+                    "proposal": run["proposal"],
+                    "force_demo": force_demo,
+                    "fast_audit": fast_audit,
+                },
+            )
+            run["audit"] = audit_resp["audit"]
+            run["rag_context"] = audit_resp.get("rag_context") or []
+            verdict = run["audit"].get("status", "—")
+            run["messages"][1] = f"Complete — gatekeeper verdict: {verdict}"
+            run["states"][1] = "done"
+            if verdict == "APPROVED":
+                run["messages"][2] = "Simulating / issuing mock tx hash…"
+                run["states"][2] = "running"
+            else:
+                run["messages"][2] = "Skipped — proposal rejected"
+                run["states"][2] = "skipped"
+                run["stage"] = 3
+                _finalize_pipeline(run)
+                return
+            run["stage"] = 2
+            return
+
+        if stage == 2:
+            exec_resp = _post(
+                api,
+                "/pipeline/execute",
+                {"proposal": run["proposal"]},
+                timeout=60,
+            )
+            run["execution"] = exec_resp["execution"]
+            mode = run["execution"].get("mode", "—")
+            run["messages"][2] = f"Complete — dispatch mode `{mode}`"
+            run["states"][2] = "done"
+            run["stage"] = 3
+            _finalize_pipeline(run)
+            return
+
+    except Exception as exc:  # noqa: BLE001
+        idx = min(stage, 2)
+        run["messages"][idx] = f"Failed: {exc}"
+        run["states"][idx] = "error"
+        run["error"] = str(exc)
+        run["active"] = False
+        st.session_state["last_result"] = {
+            "user_query": query,
+            "proposal": run.get("proposal"),
+            "rag_context": run.get("rag_context") or [],
+            "audit": run.get("audit"),
+            "execution": run.get("execution"),
+            "pipeline_status": "ERROR",
+            "error": str(exc),
+        }
+
+
+def _finalize_pipeline(run: dict) -> None:
+    audit = run.get("audit") or {}
+    execution = run.get("execution")
+    if audit.get("status") != "APPROVED":
+        status = "REJECTED"
+    elif execution and execution.get("broadcast"):
+        status = "APPROVED_EXECUTED"
+    elif execution:
+        status = "APPROVED_SIMULATED"
+    else:
+        status = "ERROR"
+
+    st.session_state["last_result"] = {
+        "user_query": run["query"],
+        "proposal": run.get("proposal"),
+        "rag_context": run.get("rag_context") or [],
+        "audit": run.get("audit"),
+        "execution": execution,
+        "pipeline_status": status,
+        "error": run.get("error"),
+    }
+    run["active"] = False
 
 
 def status_badge(status: Optional[str]) -> str:
@@ -73,13 +247,22 @@ def main() -> None:
 
     st.title("🛡️ AegisAgent")
     st.caption(
-        "Epistemically Paranoid dual-agent pipeline — Planner → RAG → Gatekeeper → Testnet"
+        "Dual-Gemini pipeline — Flash planner → RAG → 3.1 Pro gatekeeper (Flash optional) → dispatch"
     )
 
     with st.sidebar:
         st.header("Controls")
         api = st.text_input("API base URL", value=API_URL)
-        force_demo = st.checkbox("Force demo heuristics", value=True)
+        force_demo = st.checkbox(
+            "Force offline demo heuristics",
+            value=False,
+            help="Bypass Gemini and use deterministic rules",
+        )
+        fast_audit = st.checkbox(
+            "Fast audit (Flash, quicker)",
+            value=False,
+            help="Default gatekeeper is Gemini 3.1 Pro. Enable for Flash speed.",
+        )
         st.markdown("---")
         st.subheader("Pre-loaded demos")
         selected = st.radio("Test case", list(DEMO_CASES.keys()), index=0)
@@ -104,22 +287,32 @@ def main() -> None:
         height=100,
     )
 
-    run = st.button("Evaluate & Execute", type="primary", use_container_width=True)
+    pipeline_busy = bool(st.session_state.get("pipeline_run", {}).get("active"))
+    run = st.button(
+        "Evaluate & Execute",
+        type="primary",
+        use_container_width=True,
+        disabled=pipeline_busy,
+    )
 
     if run:
-        with st.spinner("Running dual-agent pipeline…"):
-            try:
-                global API_URL
-                API_URL = api
-                result = call_pipeline(query, force_demo=force_demo)
-                st.session_state["last_result"] = result
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Pipeline request failed: {exc}")
-                return
+        _init_pipeline_run(query, api=api, force_demo=force_demo, fast_audit=fast_audit)
+        st.rerun()
+
+    run_state = st.session_state.get("pipeline_run")
+    if run_state:
+        st.markdown("#### Pipeline progress")
+        render_stage_progress(run_state["messages"], run_state["states"])
+
+        if run_state.get("active"):
+            with st.spinner(f"Running step {run_state['stage'] + 1} of 3…"):
+                _advance_pipeline()
+            st.rerun()
 
     result = st.session_state.get("last_result")
     if not result:
-        st.info("Select a demo (or write an intent) and press **Evaluate & Execute**.")
+        if not run_state:
+            st.info("Select a demo (or write an intent) and press **Evaluate & Execute**.")
         return
 
     pipeline_status = result.get("pipeline_status")
@@ -135,7 +328,7 @@ def main() -> None:
 
     with col1:
         st.subheader("① Execution Agent")
-        st.caption("Gemini planner → structured calldata")
+        st.caption("Gemini Flash → structured calldata")
         st.markdown('<div class="aegis-panel">', unsafe_allow_html=True)
         if proposal:
             st.metric("Function", proposal.get("function_name", "—"))
@@ -155,7 +348,7 @@ def main() -> None:
 
     with col2:
         st.subheader("② Paranoid Auditor")
-        st.caption("Open-weights gatekeeper · assumes planner is hostile")
+        st.caption("Gemini 3.1 Pro (default) · enable Fast audit for Flash")
         st.markdown('<div class="aegis-panel">', unsafe_allow_html=True)
         if audit:
             st.metric("Verdict", status_badge(audit.get("status")))

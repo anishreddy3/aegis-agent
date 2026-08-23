@@ -7,7 +7,7 @@ User Intent
     │
     ▼
 ┌─────────────────────┐
-│  Execution Agent    │  Gemini (structured TransactionProposal)
+│  Execution Agent    │  Gemini 3.7 Flash (structured TransactionProposal)
 └─────────┬───────────┘
           │
           ▼
@@ -17,7 +17,7 @@ User Intent
           │
           ▼
 ┌─────────────────────┐
-│  Paranoid Gatekeeper│  OpenAI-compatible vLLM / NeevCloud
+│  Paranoid Gatekeeper│  Gemini 3.1 Pro (adversarial AuditVerdict)
 └─────────┬───────────┘
           │ APPROVED only
           ▼
@@ -45,7 +45,7 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8080 --reload
 
 - `GET /health`
 - `POST /evaluate-and-execute` — body `{ "query": "...", "force_demo": true }`
-- `POST /reingest` — reload ABI / invariant fixtures
+- `POST /pipeline/plan` · `/pipeline/audit` · `/pipeline/execute` — staged pipeline for live UI progress
 
 ### Observability UI
 
@@ -63,17 +63,71 @@ Open the Streamlit URL, pick a pre-loaded demo, and hit **Evaluate & Execute**.
 | Hallucinated `safeTransferWithPermitAndStake` | **REJECTED** · HALLUCINATED_METHOD |
 | Malicious unlimited approve / drain injection | **REJECTED** · MALICIOUS_SPENDER / UNLIMITED_APPROVAL |
 
-With `DEMO_MODE=true` (default) the pipeline uses deterministic offline heuristics so judges can demo without API keys. Set real keys in `.env` and `DEMO_MODE=false` to hit Gemini + your vLLM endpoint.
+With `DEMO_MODE=false` and a valid `GOOGLE_API_KEY`, both agents run live on Gemini:
+- **Planner:** `gemini-3.6-flash` (fallback chain on 503)
+- **Paranoid Gatekeeper:** `gemini-3.1-pro-preview` by default — check **Fast audit** for Flash
+
+Set `DEMO_MODE=true` (or check "Force offline demo heuristics") for deterministic offline mode.
+
+## Cloudflare Pages (static UI)
+
+The **`web/`** directory is a static dashboard deployable to Cloudflare Pages.  
+**The Python API must run elsewhere** (NeevCloud, Railway, Fly.io, Render, or your laptop + tunnel).
+
+```bash
+# one-time
+npx wrangler login
+
+# deploy UI
+make pages-deploy
+# or: npx wrangler pages deploy web --project-name=aegis-agent
+```
+
+After deploy, open your Pages URL and set **API URL** to your hosted FastAPI (e.g. `https://api.yourdomain.com`).  
+Add your Pages origin to `CORS_ORIGINS` in the API `.env`.
+
+Local preview: `make pages-dev`
+
+## Production deploy (NeevCloud + Cloudflare)
+
+Full guide: **[deploy/neevcloud/README.md](deploy/neevcloud/README.md)**
+
+Quick path on a fresh **Ubuntu 24.04 CPU VM** (NanoBoost 2 vCPU / 4 GB recommended):
+
+```bash
+sudo git clone https://github.com/anishreddy3/aegis-agent.git /opt/aegis-agent
+cd /opt/aegis-agent
+sudo bash deploy/neevcloud/setup-api.sh
+sudo nano /opt/aegis-agent/.env          # GOOGLE_API_KEY, CORS_ORIGINS
+sudo systemctl enable --now aegis-api
+```
+
+Then expose HTTPS with **Cloudflare Tunnel** (`deploy/neevcloud/cloudflared-config.yml.example`) and point the Pages UI at your API URL.
+
+Included in `deploy/neevcloud/`:
+
+| File | Purpose |
+|------|---------|
+| `README.md` | Step-by-step NeevCloud + Pages + tunnel guide |
+| `setup-api.sh` | VM bootstrap (Python venv, systemd) |
+| `aegis-api.service` | systemd unit for uvicorn |
+| `cloudflared-config.yml.example` | Tunnel ingress to `:8080` |
+| `cloudflared.service` | systemd unit for cloudflared |
+| `env.production.example` | Production `.env` template |
+| `Caddyfile.example` | Optional reverse proxy (no tunnel) |
 
 ## Configuration
 
 | Variable | Purpose |
 |----------|---------|
-| `GOOGLE_API_KEY` / `GEMINI_MODEL` | Planner agent |
-| `PARANOID_BASE_URL` / `PARANOID_MODEL` | OpenAI-compatible auditor (NeevCloud / vLLM) |
-| `OPENAI_API_KEY` | Fallback if custom `base_url` is down |
+| `GOOGLE_API_KEY` | Shared key for both Gemini agents |
+| `GEMINI_MODEL` | Planner agent (default: `gemini-3.6-flash`) |
+| `GEMINI_PARANOID_MODEL` | Gatekeeper default — Pro (default: `gemini-3.1-pro-preview`) |
+| `GEMINI_PARANOID_FAST_MODEL` | Gatekeeper when Fast audit enabled (`gemini-3.7-flash`) |
+| `PARANOID_USE_VLLM` | Enable optional vLLM/NeevCloud endpoint (default: `false`) |
+| `OPENAI_API_KEY` | Optional fallback if vLLM is enabled |
 | `RPC_URL` / `CHAIN_ID` / `PRIVATE_KEY` | Testnet broadcast (optional) |
-| `DEMO_MODE` | Offline planner + auditor heuristics |
+| `DEMO_MODE` | Offline heuristics when no API key |
 
 Without `PRIVATE_KEY`, approved txs return a deterministic **mock** hash after local simulation logic (or skip RPC if unreachable).
 
@@ -88,7 +142,10 @@ aegis-agent/
 │   ├── rag/             # Chroma + sample ABIs / invariants
 │   ├── execution/       # web3.py simulate / broadcast
 │   └── main.py          # FastAPI orchestrator
-├── frontend/app.py      # Streamlit dual-agent debate UI
+├── frontend/app.py      # Streamlit UI (local dev)
+├── web/                 # Static UI → Cloudflare Pages
+├── deploy/neevcloud/    # NeevCloud CPU VM + Cloudflare Tunnel
+├── wrangler.toml
 ├── .env.example
 └── requirements.txt
 ```

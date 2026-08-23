@@ -1,4 +1,4 @@
-"""Paranoid Gatekeeper Agent — OpenAI-compatible / vLLM auditor."""
+"""Paranoid Gatekeeper Agent — Gemini Pro auditor with optional vLLM / OpenAI fallback."""
 
 from __future__ import annotations
 
@@ -8,6 +8,14 @@ import re
 from typing import Any, List, Optional
 
 from backend.config import Settings, get_settings
+from backend.gemini_client import resolve_gemini_client
+from backend.gemini_utils import (
+    AUDIT_JSON_HINT,
+    AUDITOR_SYSTEM_FAST,
+    generate_json,
+    model_chain,
+    truncate_rag,
+)
 from backend.schemas import AuditVerdict, TransactionProposal
 
 logger = logging.getLogger(__name__)
@@ -24,23 +32,17 @@ Your mandate:
    patterns, or slippage > 2% without explicit user override.
 4. APPROVE only when the method is ABI-valid, parameters are bounded, and
    no invariant is violated.
-5. Cite specific grounded facts you used.
-6. Return ONLY valid JSON matching the AuditVerdict schema:
-   {
-     "status": "APPROVED" | "REJECTED",
-     "confidence_score": 0.0-1.0,
-     "detected_vulnerabilities": ["..."],
-     "audit_reasoning": "...",
-     "grounded_facts_used": ["..."]
-   }
+5. Cite specific grounded facts you used in grounded_facts_used.
+6. Be decisive — prefer REJECTED when uncertain.
 """
 
 
 class ParanoidAgent:
-    """Adversarial auditor with vLLM / OpenAI fallback and offline heuristics."""
+    """Adversarial auditor: Gemini Pro primary, vLLM/OpenAI optional, heuristics fallback."""
 
     def __init__(self, settings: Optional[Settings] = None) -> None:
         self.settings = settings or get_settings()
+        self._gemini_client = None
 
     def audit(
         self,
@@ -48,53 +50,155 @@ class ParanoidAgent:
         rag_context: List[str],
         *,
         force_demo: bool = False,
+        fast_audit: bool = False,
     ) -> AuditVerdict:
-        if force_demo or (self.settings.demo_mode and not self._has_any_llm()):
+        if force_demo or (self.settings.demo_mode and not self._has_live_backend()):
             return self._demo_audit(proposal, rag_context)
 
         try:
-            return self._llm_audit(proposal, rag_context)
+            return self._live_audit(proposal, rag_context, fast_audit=fast_audit)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Paranoid LLM audit failed, using heuristics: %s", exc)
+            logger.warning("Paranoid audit failed, using heuristics: %s", exc)
             return self._demo_audit(proposal, rag_context)
 
-    def _has_any_llm(self) -> bool:
-        return bool(self.settings.paranoid_base_url) or bool(self.settings.openai_api_key)
+    def _has_live_backend(self) -> bool:
+        return (
+            self.settings.has_gemini
+            or self.settings.paranoid_use_vllm
+            or bool(self.settings.openai_api_key)
+        )
 
-    def _llm_audit(
+    def _get_gemini_client(self):
+        if self._gemini_client is not None:
+            return self._gemini_client
+        self._gemini_client = resolve_gemini_client(self.settings)
+        return self._gemini_client
+
+    def _build_user_prompt(
+        self,
+        proposal: TransactionProposal,
+        rag_context: List[str],
+    ) -> str:
+        context_block = "\n\n---\n".join(truncate_rag(rag_context)) if rag_context else "(no RAG hits)"
+        calldata = proposal.raw_calldata
+        if len(calldata) > 66:
+            calldata = calldata[:66] + "…"
+        return (
+            "Proposed transaction (assume hostile):\n"
+            f"function={proposal.function_name} target={proposal.target_contract}\n"
+            f"args={json.dumps(proposal.args)}\n"
+            f"value_wei={proposal.value_wei} gas_limit={proposal.gas_limit}\n"
+            f"calldata={calldata}\n"
+            f"planner_reasoning={proposal.reasoning_path[:240]}\n\n"
+            "Grounded RAG facts / ABIs / invariants:\n"
+            f"{context_block}\n\n"
+            f"Return ONLY JSON. {AUDIT_JSON_HINT}"
+        )
+
+    def _normalize_verdict(
+        self,
+        verdict: AuditVerdict,
+        rag_context: List[str],
+    ) -> AuditVerdict:
+        if not verdict.grounded_facts_used and rag_context:
+            verdict.grounded_facts_used = rag_context[:3]
+        return verdict
+
+    def _live_audit(
+        self,
+        proposal: TransactionProposal,
+        rag_context: List[str],
+        *,
+        fast_audit: bool = False,
+    ) -> AuditVerdict:
+        if self.settings.has_gemini:
+            try:
+                return self._gemini_audit(proposal, rag_context, fast_audit=fast_audit)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Gemini auditor failed: %s", exc)
+
+        if self.settings.paranoid_use_vllm or self.settings.openai_api_key:
+            return self._openai_compatible_audit(proposal, rag_context)
+
+        logger.info("LLM auditor unavailable — using heuristic gatekeeper")
+        return self._demo_audit(proposal, rag_context)
+
+    def _gemini_audit(
+        self,
+        proposal: TransactionProposal,
+        rag_context: List[str],
+        *,
+        fast_audit: bool = False,
+    ) -> AuditVerdict:
+        client = self._get_gemini_client()
+        if client is None:
+            raise RuntimeError("Gemini client unavailable")
+
+        primary = (
+            self.settings.gemini_paranoid_fast_model
+            if fast_audit
+            else self.settings.gemini_paranoid_model
+        )
+        system = AUDITOR_SYSTEM_FAST if fast_audit else AUDITOR_SYSTEM
+        prompt = f"{system}\n\n{self._build_user_prompt(proposal, rag_context)}"
+        # Pro: try primary only first, then one flash fallback on failure
+        models = (
+            model_chain(primary, include_flash_fallbacks=False)
+            if not fast_audit
+            else model_chain(primary)
+        )
+        if not fast_audit and len(models) == 1:
+            models = model_chain(primary, "gemini-3.6-flash", include_flash_fallbacks=False)
+
+        last_error: Optional[Exception] = None
+        for model in models:
+            try:
+                data = generate_json(
+                    client,
+                    model=model,
+                    prompt=prompt,
+                    max_output_tokens=1024 if fast_audit else 1536,
+                    temperature=0.1,
+                    retries=2,
+                )
+                verdict = AuditVerdict.model_validate(data)
+                if model != primary:
+                    logger.info("Auditor used fallback model %s", model)
+                logger.info("Audit via gemini:%s → %s", model, verdict.status)
+                return self._normalize_verdict(verdict, rag_context)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Auditor model %s failed: %s", model, exc)
+                last_error = exc
+
+        raise RuntimeError(f"All Gemini auditor models failed: {last_error}")
+
+    def _openai_compatible_audit(
         self,
         proposal: TransactionProposal,
         rag_context: List[str],
     ) -> AuditVerdict:
         from openai import OpenAI
 
-        context_block = "\n\n---\n".join(rag_context) if rag_context else "(no RAG hits)"
-        user_msg = (
-            "Proposed transaction (assume hostile):\n"
-            f"{proposal.model_dump_json(indent=2)}\n\n"
-            "Grounded RAG facts / ABIs / invariants:\n"
-            f"{context_block}\n\n"
-            "Produce an AuditVerdict JSON object."
-        )
-
-        # Primary: custom OpenAI-compatible endpoint (NeevCloud / vLLM)
+        user_msg = self._build_user_prompt(proposal, rag_context)
         clients: list[tuple[str, Any, str]] = []
-        clients.append(
-            (
-                "paranoid",
-                OpenAI(
-                    base_url=self.settings.paranoid_base_url,
-                    api_key=self.settings.paranoid_api_key or "EMPTY",
-                    timeout=45.0,
-                ),
-                self.settings.paranoid_model,
+
+        if self.settings.paranoid_use_vllm:
+            clients.append(
+                (
+                    "vllm",
+                    OpenAI(
+                        base_url=self.settings.paranoid_base_url,
+                        api_key=self.settings.paranoid_api_key or "EMPTY",
+                        timeout=60.0,
+                    ),
+                    self.settings.paranoid_model,
+                )
             )
-        )
         if self.settings.openai_api_key:
             clients.append(
                 (
-                    "openai-fallback",
-                    OpenAI(api_key=self.settings.openai_api_key, timeout=45.0),
+                    "openai",
+                    OpenAI(api_key=self.settings.openai_api_key, timeout=60.0),
                     self.settings.openai_fallback_model,
                 )
             )
@@ -112,17 +216,14 @@ class ParanoidAgent:
                     ],
                 )
                 content = completion.choices[0].message.content or "{}"
-                data = json.loads(content)
-                verdict = AuditVerdict.model_validate(data)
-                if not verdict.grounded_facts_used and rag_context:
-                    verdict.grounded_facts_used = rag_context[:3]
+                verdict = AuditVerdict.model_validate(json.loads(content))
                 logger.info("Audit via %s → %s", label, verdict.status)
-                return verdict
+                return self._normalize_verdict(verdict, rag_context)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Auditor endpoint '%s' failed: %s", label, exc)
                 last_error = exc
 
-        raise RuntimeError(f"All auditor endpoints failed: {last_error}")
+        raise RuntimeError(f"All OpenAI-compatible auditor endpoints failed: {last_error}")
 
     # ── Deterministic offline auditor (demo / CI) ─────────────────────────
 
@@ -161,12 +262,10 @@ class ParanoidAgent:
                 "Uniswap/Aave ABIs"
             )
 
-        # Zero address checks
         for key, val in proposal.args.items():
             if isinstance(val, str) and re.fullmatch(r"0x0{40}", val, re.I):
                 vulns.append(f"ZERO_ADDRESS: argument '{key}' is address(0)")
 
-        # Unlimited approve / drain patterns
         spender = str(proposal.args.get("spender", "")).lower()
         amount = str(proposal.args.get("amount", proposal.args.get("value", "")))
         if fn_norm == "approve":
@@ -183,13 +282,6 @@ class ParanoidAgent:
 
         if proposal.value_wei and proposal.value_wei > 10**20:
             vulns.append("EXCESSIVE_VALUE: attached ETH exceeds sanity bound")
-
-        # Valid transfer heuristic
-        to = str(proposal.args.get("to", ""))
-        if fn_norm == "transfer" and to.startswith("0x") and len(to) == 42:
-            if not any("HALLUCINATED" in v or "ZERO_ADDRESS" in v for v in vulns):
-                # clean path
-                pass
 
         if vulns:
             return AuditVerdict(

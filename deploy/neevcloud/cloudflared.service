@@ -1,0 +1,15 @@
+[Unit]
+Description=Cloudflare Tunnel (AegisAgent API)
+After=network-online.target aegis-api.service
+Wants=network-online.target
+Documentation=https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/cloudflared --config /etc/cloudflared/config.yml tunnel run
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

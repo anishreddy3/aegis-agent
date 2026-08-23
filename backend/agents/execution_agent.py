@@ -8,6 +8,8 @@ import re
 from typing import Any, Dict, Optional
 
 from backend.config import Settings, get_settings
+from backend.gemini_client import resolve_gemini_client
+from backend.gemini_utils import PROPOSAL_JSON_HINT, generate_json, model_chain, normalize_proposal_data
 from backend.schemas import TransactionProposal
 
 logger = logging.getLogger(__name__)
@@ -38,16 +40,8 @@ class ExecutionAgent:
     def _get_client(self):
         if self._client is not None:
             return self._client
-        if not self.settings.has_gemini:
-            return None
-        try:
-            from google import genai
-
-            self._client = genai.Client(api_key=self.settings.google_api_key)
-            return self._client
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to init Gemini client: %s", exc)
-            return None
+        self._client = resolve_gemini_client(self.settings)
+        return self._client
 
     def generate_proposal(
         self,
@@ -73,30 +67,31 @@ class ExecutionAgent:
         prompt = (
             f"{PLANNER_SYSTEM}\n\n"
             f"User intent:\n{user_query}\n\n"
-            "Return a TransactionProposal JSON object only."
+            f"Return ONLY JSON. {PROPOSAL_JSON_HINT}"
         )
+        models = model_chain(self.settings.gemini_model, include_flash_fallbacks=True)
+        last_error: Optional[Exception] = None
+        for model in models:
+            try:
+                data = normalize_proposal_data(
+                    generate_json(
+                        client,
+                        model=model,
+                        prompt=prompt,
+                        max_output_tokens=2048,
+                        temperature=0.2,
+                        retries=2,
+                    )
+                )
+                proposal = TransactionProposal.model_validate(data)
+                if model != self.settings.gemini_model:
+                    logger.info("Planner used fallback model %s", model)
+                return proposal
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Planner model %s failed: %s", model, exc)
+                last_error = exc
 
-        # google-genai structured output via response_schema
-        response = client.models.generate_content(
-            model=self.settings.gemini_model,
-            contents=prompt,
-            config={
-                "response_mime_type": "application/json",
-                "response_schema": TransactionProposal,
-                "temperature": 0.2,
-            },
-        )
-
-        raw = getattr(response, "text", None) or ""
-        if not raw and hasattr(response, "parsed") and response.parsed is not None:
-            parsed = response.parsed
-            if isinstance(parsed, TransactionProposal):
-                return parsed
-            if isinstance(parsed, dict):
-                return TransactionProposal.model_validate(parsed)
-
-        data = json.loads(raw)
-        return TransactionProposal.model_validate(data)
+        raise RuntimeError(f"All planner models failed: {last_error}")
 
     # ── Demo / offline heuristics (hackathon-friendly) ────────────────────
 

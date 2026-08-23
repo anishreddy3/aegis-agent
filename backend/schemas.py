@@ -97,6 +97,15 @@ class PipelineRequest(BaseModel):
         default=False,
         description="Force offline demo heuristics even if API keys are present",
     )
+    deep_audit: bool = Field(
+        default=False,
+        description="Deprecated alias — use fast_audit instead",
+        deprecated=True,
+    )
+    fast_audit: bool = Field(
+        default=False,
+        description="Use Gemini Flash for gatekeeper (faster). Default is Pro.",
+    )
 
 
 class PipelineResponse(BaseModel):
@@ -114,3 +123,36 @@ class PipelineResponse(BaseModel):
         "ERROR",
     ] = "ERROR"
     error: Optional[str] = None
+
+
+class StagePlanRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    force_demo: bool = False
+
+
+class StagePlanResponse(BaseModel):
+    proposal: TransactionProposal
+    stage: Literal["plan"] = "plan"
+
+
+class StageAuditRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    proposal: TransactionProposal
+    force_demo: bool = False
+    fast_audit: bool = False
+    deep_audit: bool = False  # deprecated: ignored unless fast_audit unset legacy clients
+
+
+class StageAuditResponse(BaseModel):
+    audit: AuditVerdict
+    rag_context: List[str] = Field(default_factory=list)
+    stage: Literal["audit"] = "audit"
+
+
+class StageExecuteRequest(BaseModel):
+    proposal: TransactionProposal
+
+
+class StageExecuteResponse(BaseModel):
+    execution: ExecutionResult
+    stage: Literal["execute"] = "execute"

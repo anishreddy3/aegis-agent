@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AegisAgent — Dual-Agent Web3 Validation</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="header">
+    <div>
+      <h1>🛡️ AegisAgent</h1>
+      <p class="subtitle">Pro gatekeeper by default · Flash planner → RAG → audit → dispatch</p>
+    </div>
+    <div class="controls">
+      <label>API URL <input id="apiUrl" type="url" placeholder="https://your-api.example.com" /></label>
+      <label class="check"><input id="forceDemo" type="checkbox" /> Offline demo</label>
+      <label class="check"><input id="fastAudit" type="checkbox" /> Fast audit (Flash)</label>
+    </div>
+  </header>
+
+  <section class="demos">
+    <span class="label">Quick demos:</span>
+    <button data-demo="0" class="demo-btn">Valid transfer</button>
+    <button data-demo="1" class="demo-btn">Hallucinated method</button>
+    <button data-demo="2" class="demo-btn">Drain / injection</button>
+  </section>
+
+  <textarea id="query" rows="3" placeholder="Natural-language transaction intent…"></textarea>
+  <button id="runBtn" class="primary">Evaluate &amp; Execute</button>
+
+  <section id="progress" class="progress hidden">
+    <h2>Pipeline progress</h2>
+    <div class="steps" id="steps"></div>
+  </section>
+
+  <section id="statusBar" class="status-bar hidden"></section>
+
+  <main class="grid" id="results">
+    <article class="panel" id="colPlanner">
+      <h3>① Execution Agent</h3>
+      <p class="cap">Gemini Flash planner</p>
+      <div id="plannerBody" class="body muted">Waiting…</div>
+    </article>
+    <article class="panel" id="colAuditor">
+      <h3>② Paranoid Auditor</h3>
+      <p class="cap">Gemini 3.1 Pro (toggle Flash for speed)</p>
+      <div id="auditorBody" class="body muted">Waiting…</div>
+    </article>
+    <article class="panel" id="colDispatch">
+      <h3>③ Dispatch</h3>
+      <p class="cap">Simulate / mock tx</p>
+      <div id="dispatchBody" class="body muted">Waiting…</div>
+    </article>
+  </main>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

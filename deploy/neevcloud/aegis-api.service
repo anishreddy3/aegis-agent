@@ -1,0 +1,24 @@
+[Unit]
+Description=AegisAgent FastAPI (dual-agent Web3 validation pipeline)
+Documentation=https://github.com/anishreddy3/aegis-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aegis
+Group=aegis
+WorkingDirectory=/opt/aegis-agent
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/opt/aegis-agent/.env
+ExecStart=/opt/aegis-agent/.venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8080 --workers 1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Hardening (adjust if you hit permission issues)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+# Optional reverse proxy when NOT using Cloudflare Tunnel.
+# Install Caddy, copy to /etc/caddy/Caddyfile, set DNS A record → VM IP.
+#
+#   sudo systemctl reload caddy
+
+api.yourdomain.com {
+	encode gzip
+	reverse_proxy 127.0.0.1:8080 {
+		# Pro audit can take 60–90 seconds
+		transport http {
+			read_timeout 120s
+			write_timeout 120s
+		}
+	}
+}

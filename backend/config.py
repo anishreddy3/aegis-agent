@@ -20,11 +20,14 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Gemini planner
+    # Gemini — dual-agent (planner + paranoid gatekeeper)
     google_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-3.6-flash"
+    gemini_paranoid_model: str = "gemini-3.1-pro-preview"
+    gemini_paranoid_fast_model: str = "gemini-3.6-flash"
 
-    # Paranoid auditor (OpenAI-compatible)
+    # Optional OpenAI-compatible vLLM (disabled by default; use Gemini on paid tier)
+    paranoid_use_vllm: bool = False
     paranoid_base_url: str = "http://localhost:8000/v1"
     paranoid_api_key: str = "not-needed-for-local-vllm"
     paranoid_model: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"
