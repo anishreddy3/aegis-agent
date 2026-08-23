@@ -11,3 +11,5 @@ __pycache__/
 backend/rag/.chroma/
 *.log
 .streamlit/secrets.toml
+node_modules/
+integrations/wdk/node_modules/

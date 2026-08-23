@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.agents.execution_agent import ExecutionAgent
 from backend.agents.paranoid_agent import ParanoidAgent
 from backend.config import get_settings
+from backend.integrations.wdk_payload import build_wdk_sign_request
 from backend.execution.web3_executor import Web3Executor
 from backend.rag.vector_store import VectorStore
 from backend.schemas import (
@@ -96,6 +97,7 @@ def health() -> dict[str, Any]:
         "execution_key_configured": settings.has_execution_key,
         "chain_id": settings.chain_id,
         "rpc_url": settings.rpc_url,
+        "wdk_integration": True,
     }
 
 
@@ -159,7 +161,8 @@ def pipeline_audit(body: StageAuditRequest) -> StageAuditResponse:
 def pipeline_execute(body: StageExecuteRequest) -> StageExecuteResponse:
     logger.info("Pipeline stage=execute function=%s", body.proposal.function_name)
     execution = web3_executor.execute(body.proposal)
-    return StageExecuteResponse(execution=execution)
+    wdk = build_wdk_sign_request(body.proposal) if execution.simulation_ok else None
+    return StageExecuteResponse(execution=execution, wdk_sign_request=wdk)
 
 
 @app.post("/evaluate-and-execute", response_model=PipelineResponse)
@@ -204,12 +207,14 @@ def evaluate_and_execute(body: PipelineRequest) -> PipelineResponse:
             if execution.broadcast
             else "APPROVED_SIMULATED"
         )
+        wdk = build_wdk_sign_request(proposal) if execution.simulation_ok else None
         return PipelineResponse(
             user_query=query,
             proposal=proposal,
             rag_context=rag_context,
             audit=audit,
             execution=execution,
+            wdk_sign_request=wdk,
             pipeline_status=status,
         )
 

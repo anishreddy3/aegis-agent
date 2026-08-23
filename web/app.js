@@ -160,16 +160,26 @@ function renderAuditor(a) {
     <div class="kv"><strong>RAG facts</strong>${facts || "—"}</div>`;
 }
 
-function renderDispatch(ex, pipelineStatus) {
+function renderDispatch(ex, pipelineStatus, wdk) {
   if (pipelineStatus === "REJECTED") {
-    return '<p class="tag bad">Blocked by gatekeeper — no broadcast attempted</p>';
+    return '<p class="tag bad">Blocked by gatekeeper — WDK sign never invoked</p>';
   }
   if (!ex) return '<p class="muted">No execution</p>';
+  let wdkBlock = "";
+  if (wdk?.wdk_ready) {
+    wdkBlock = `
+    <div class="kv"><strong>WDK sign request</strong>
+      <span class="tag ok">READY</span>
+      <pre class="mono wdk-payload">${JSON.stringify(wdk, null, 2)}</pre>
+      <p class="muted small">Pass to <code>@tetherto/wdk</code> after policy check — see <code>integrations/wdk/</code></p>
+    </div>`;
+  }
   return `
     <div class="kv">Simulation: ${ex.simulation_ok ? "PASS" : "FAIL"}</div>
     <div class="kv">Mode: ${ex.mode}</div>
     <div class="kv"><strong>Tx hash</strong><br><code class="mono">${ex.tx_hash || "—"}</code></div>
     <div class="kv">Gas: ${ex.gas_used ?? "—"}</div>
+    ${wdkBlock}
     ${ex.error ? `<div class="kv">${ex.error}</div>` : ""}`;
 }
 
@@ -190,7 +200,7 @@ async function runPipeline() {
   $("statusBar").classList.add("hidden");
   $("runBtn").disabled = true;
 
-  let proposal, audit, execution, pipelineStatus;
+  let proposal, audit, execution, pipelineStatus, wdkSignRequest;
 
   try {
     setStep(states, 0, { state: "running", icon: "▶", msg: "Gemini Flash planning…" });
@@ -227,6 +237,7 @@ async function runPipeline() {
       setStep(states, 2, { state: "running", icon: "▶", msg: "Simulating dispatch…" });
       const execResp = await post("/pipeline/execute", { proposal }, 60000);
       execution = execResp.execution;
+      wdkSignRequest = execResp.wdk_sign_request;
       pipelineStatus = execution.broadcast ? "APPROVED_EXECUTED" : "APPROVED_SIMULATED";
       setStep(states, 2, {
         state: "done",
@@ -238,7 +249,7 @@ async function runPipeline() {
       setStep(states, 2, { state: "skipped", icon: "—", msg: "Skipped (rejected)" });
     }
 
-    $("dispatchBody").innerHTML = renderDispatch(execution, pipelineStatus);
+    $("dispatchBody").innerHTML = renderDispatch(execution, pipelineStatus, wdkSignRequest);
     $("statusBar").textContent = `Pipeline: ${pipelineStatus}`;
     $("statusBar").classList.remove("hidden");
   } catch (err) {

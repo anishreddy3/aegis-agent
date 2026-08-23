@@ -281,6 +281,24 @@ AEGIS_DEFAULT_API=https://NEW-TUNNEL.trycloudflare.com make pages-deploy
 
 Without `PRIVATE_KEY`, approved txs return a deterministic **mock** hash.
 
+## WDK Track (Tether Agent Wallets)
+
+AegisAgent gates **[WDK](https://docs.wdk.tether.io/)** agent wallets: audit first, sign second.
+
+| Layer | Location |
+|-------|----------|
+| **A** API `wdk_sign_request` | `backend/integrations/wdk_payload.py` |
+| **B** Node bridge | `integrations/wdk/sign-approved.mjs` |
+| **C** `registerPolicy` hook | `integrations/wdk/aegis-policy.mjs` |
+
+```bash
+cd integrations/wdk && npm install
+npm run policy-demo
+AEGIS_API_URL=http://127.0.0.1:8080 npm run sign-approved
+```
+
+Full guide: **[integrations/wdk/README.md](integrations/wdk/README.md)**
+
 ---
 
 ## Project layout
@@ -296,6 +314,7 @@ aegis-agent/
 ├── web/                 # Static UI → Cloudflare Pages
 ├── scripts/             # generate-pages-config.sh
 ├── deploy/neevcloud/    # NeevCloud + tunnel deploy assets
+├── integrations/wdk/    # Tether WDK bridge (WDK track)
 ├── Makefile
 ├── wrangler.toml
 ├── .env.example

@@ -21,7 +21,7 @@
         <span class="pill">Gemini Flash · Planner</span>
         <span class="pill">Chroma RAG · ABIs</span>
         <span class="pill">Gemini Pro · Gatekeeper</span>
-        <span class="pill">Web3 · Simulate / broadcast</span>
+        <span class="pill">WDK · Agent wallet gate</span>
       </div>
       <div id="apiStatus" class="api-status muted">Checking API…</div>
     </div>
@@ -50,9 +50,9 @@
       <div class="arch-arrow" aria-hidden="true">→</div>
       <article class="arch-node">
         <div class="arch-num">3</div>
-        <h3>Web3 Executor</h3>
-        <p class="arch-model">eth_call / estimateGas</p>
-        <p>Simulates approved txs locally. Optional testnet broadcast when keys are configured.</p>
+        <h3>WDK + Web3 Executor</h3>
+        <p class="arch-model">@tetherto/wdk · policy gate</p>
+        <p>Approved calldata exported for WDK <code>sendTransaction</code>. Policy hook blocks sign unless gatekeeper APPROVED token matches.</p>
       </article>
     </div>
     <pre class="arch-diagram" aria-label="Pipeline diagram">User Intent

@@ -89,6 +89,32 @@ class ExecutionResult(BaseModel):
     mode: Literal["mock", "simulate", "broadcast"] = "mock"
 
 
+class WdkSignRequest(BaseModel):
+    """Calldata bundle for @tetherto/wdk after Paranoid Gatekeeper APPROVED."""
+
+    wdk_ready: bool = True
+    chain: Literal["evm"] = "evm"
+    blockchain: str = Field(
+        default="ethereum",
+        description="WDK registerWallet blockchain key",
+    )
+    to: str = Field(..., description="Contract or recipient address")
+    data: str = Field(..., description="Hex calldata")
+    value: str = Field(default="0", description="Native value in wei (decimal string)")
+    gas: int = Field(default=300_000, ge=21_000)
+    chain_id: int = Field(..., description="EVM chain id for WDK / RPC")
+    gatekeeper: Literal["APPROVED"] = "APPROVED"
+    function_name: str = Field(default="")
+    approval_token: str = Field(
+        ...,
+        description="SHA-256 fingerprint — WDK policy allows only matching txs",
+    )
+    policy_hint: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Metadata for WDK registerPolicy integration",
+    )
+
+
 class PipelineRequest(BaseModel):
     """Inbound user intent for the evaluate-and-execute pipeline."""
 
@@ -116,6 +142,7 @@ class PipelineResponse(BaseModel):
     rag_context: List[str] = Field(default_factory=list)
     audit: Optional[AuditVerdict] = None
     execution: Optional[ExecutionResult] = None
+    wdk_sign_request: Optional[WdkSignRequest] = None
     pipeline_status: Literal[
         "APPROVED_EXECUTED",
         "APPROVED_SIMULATED",
@@ -155,4 +182,5 @@ class StageExecuteRequest(BaseModel):
 
 class StageExecuteResponse(BaseModel):
     execution: ExecutionResult
+    wdk_sign_request: Optional[WdkSignRequest] = None
     stage: Literal["execute"] = "execute"

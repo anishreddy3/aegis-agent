@@ -319,6 +319,17 @@ textarea {
   margin: .35rem 0;
   font-size: .82rem;
 }
+.wdk-payload {
+  margin-top: .5rem;
+  padding: .65rem;
+  background: #060a10;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 220px;
+  overflow: auto;
+  font-size: .72rem;
+}
+.small { font-size: .78rem; }
 
 .footer {
   margin-top: 2rem;
