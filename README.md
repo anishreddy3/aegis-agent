@@ -7,7 +7,7 @@ User Intent
     │
     ▼
 ┌─────────────────────┐
-│  Execution Agent    │  Gemini 3.7 Flash (structured TransactionProposal)
+│  Execution Agent    │  Gemini 3.6 Flash (structured TransactionProposal)
 └─────────┬───────────┘
           │
           ▼
@@ -26,34 +26,68 @@ User Intent
 └─────────────────────┘
 ```
 
-## Quick start
+## Quick start (local)
 
 ```bash
+git clone https://github.com/anishreddy3/aegis-agent.git
 cd aegis-agent
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env        # works out of the box with DEMO_MODE=true
+cp .env.example .env
 ```
 
-### API
+Edit `.env` for live Gemini (optional):
 
 ```bash
-# from repo root so `backend` is importable
+GOOGLE_API_KEY=your_key
+DEMO_MODE=false
+```
+
+### Run API (terminal 1)
+
+```bash
+source .venv/bin/activate
 uvicorn backend.main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
-- `GET /health`
-- `POST /evaluate-and-execute` — body `{ "query": "...", "force_demo": true }`
-- `POST /pipeline/plan` · `/pipeline/audit` · `/pipeline/execute` — staged pipeline for live UI progress
-
-### Observability UI
+### Run Streamlit UI (terminal 2, optional)
 
 ```bash
+source .venv/bin/activate
 streamlit run frontend/app.py
 ```
 
-Open the Streamlit URL, pick a pre-loaded demo, and hit **Evaluate & Execute**.
+### Run static UI locally (optional)
+
+```bash
+make pages-dev
+# open the URL wrangler prints (default API: http://localhost:8080)
+```
+
+### Verify API
+
+```bash
+curl -s http://localhost:8080/health | python3 -m json.tool
+
+curl -s -X POST http://localhost:8080/pipeline/plan \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"Transfer 1 USDC to 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0"}' \
+  | python3 -m json.tool
+```
+
+**API endpoints**
+
+| Method | Path | Body |
+|--------|------|------|
+| `GET` | `/health` | — |
+| `POST` | `/evaluate-and-execute` | `{ "query": "...", "force_demo": false }` |
+| `POST` | `/pipeline/plan` | `{ "query": "..." }` |
+| `POST` | `/pipeline/audit` | `{ "query", "proposal", "fast_audit": false }` |
+| `POST` | `/pipeline/execute` | `{ "proposal" }` |
+| `POST` | `/reingest` | Rebuild Chroma from fixtures |
+
+---
 
 ## Demo cases (built into the UI)
 
@@ -63,96 +97,206 @@ Open the Streamlit URL, pick a pre-loaded demo, and hit **Evaluate & Execute**.
 | Hallucinated `safeTransferWithPermitAndStake` | **REJECTED** · HALLUCINATED_METHOD |
 | Malicious unlimited approve / drain injection | **REJECTED** · MALICIOUS_SPENDER / UNLIMITED_APPROVAL |
 
-With `DEMO_MODE=false` and a valid `GOOGLE_API_KEY`, both agents run live on Gemini:
-- **Planner:** `gemini-3.6-flash` (fallback chain on 503)
-- **Paranoid Gatekeeper:** `gemini-3.1-pro-preview` by default — check **Fast audit** for Flash
+With `DEMO_MODE=false` and a valid `GOOGLE_API_KEY`:
 
-Set `DEMO_MODE=true` (or check "Force offline demo heuristics") for deterministic offline mode.
+- **Planner:** `gemini-3.6-flash` (fallback on 503)
+- **Gatekeeper:** `gemini-3.1-pro-preview` by default — enable **Fast audit** for Flash (~10s vs Pro ~60s)
 
-## Cloudflare Pages (static UI)
+Set `DEMO_MODE=true` (or **Offline demo** in the UI) for deterministic heuristics without Gemini.
 
-The **`web/`** directory is a static dashboard deployable to Cloudflare Pages.  
-**The Python API must run elsewhere** (NeevCloud, Railway, Fly.io, Render, or your laptop + tunnel).
+---
+
+## Production deploy — NeevCloud + Cloudflare (no custom domain)
+
+Recommended hackathon path: **API on NeevCloud CPU VM**, **UI on Cloudflare Pages**, **HTTPS via Quick Tunnel** (`*.trycloudflare.com`).
+
+Detailed guides:
+
+- **[deploy/neevcloud/CLOUDFLARE-NO-DOMAIN.md](deploy/neevcloud/CLOUDFLARE-NO-DOMAIN.md)** — no domain (**start here**)
+- **[deploy/neevcloud/README.md](deploy/neevcloud/README.md)** — full reference + custom domain tunnel
+
+### 1. SSH into NeevCloud VM
 
 ```bash
-# one-time
-npx wrangler login
-
-# deploy UI
-make pages-deploy
-# or: npx wrangler pages deploy web --project-name=aegis-agent
+ssh root@YOUR_VM_PUBLIC_IP
+# or: ssh -i ~/.ssh/your_key ubuntu@YOUR_VM_PUBLIC_IP
 ```
 
-After deploy, open your Pages URL — the API URL is preconfigured if you used `AEGIS_DEFAULT_API` (see [deploy/neevcloud/CLOUDFLARE-NO-DOMAIN.md](deploy/neevcloud/CLOUDFLARE-NO-DOMAIN.md)).
+### 2. Bootstrap API on the VM
 
 ```bash
-AEGIS_DEFAULT_API=https://your-tunnel.trycloudflare.com make pages-deploy
-```
-
-Add your Pages origin to `CORS_ORIGINS` in the API `.env`.
-
-Local preview: `make pages-dev`
-
-## Production deploy (NeevCloud + Cloudflare)
-
-Full guide: **[deploy/neevcloud/README.md](deploy/neevcloud/README.md)**
-
-Quick path on a fresh **Ubuntu 24.04 CPU VM** (NanoBoost 2 vCPU / 4 GB recommended):
-
-```bash
+sudo apt-get update && sudo apt-get install -y git
 sudo git clone https://github.com/anishreddy3/aegis-agent.git /opt/aegis-agent
 cd /opt/aegis-agent
 sudo bash deploy/neevcloud/setup-api.sh
-sudo nano /opt/aegis-agent/.env          # GOOGLE_API_KEY, CORS_ORIGINS
-sudo systemctl enable --now aegis-api
 ```
 
-Then expose HTTPS with **Cloudflare Tunnel** — see:
+### 3. Configure production `.env`
 
-- **No domain:** [deploy/neevcloud/CLOUDFLARE-NO-DOMAIN.md](deploy/neevcloud/CLOUDFLARE-NO-DOMAIN.md) (Quick Tunnel + Pages — **start here**)
-- **Custom domain:** [deploy/neevcloud/README.md](deploy/neevcloud/README.md) Part 2 (named tunnel)
+```bash
+sudo nano /opt/aegis-agent/.env
+```
 
-Included in `deploy/neevcloud/`:
+Minimum:
 
-| File | Purpose |
-|------|---------|
-| `README.md` | Step-by-step NeevCloud + Pages + tunnel guide |
-| `setup-api.sh` | VM bootstrap (Python venv, systemd) |
-| `aegis-api.service` | systemd unit for uvicorn |
-| `cloudflared-config.yml.example` | Tunnel ingress to `:8080` |
-| `cloudflared.service` | systemd unit for cloudflared |
-| `env.production.example` | Production `.env` template |
-| `Caddyfile.example` | Optional reverse proxy (no tunnel) |
+```bash
+GOOGLE_API_KEY=your_key
+DEMO_MODE=false
+GEMINI_MODEL=gemini-3.6-flash
+GEMINI_PARANOID_MODEL=gemini-3.1-pro-preview
+GEMINI_PARANOID_FAST_MODEL=gemini-3.6-flash
+CORS_ORIGINS=https://aegis-agent.pages.dev
+```
+
+```bash
+sudo chown aegis:aegis /opt/aegis-agent/.env
+sudo chmod 600 /opt/aegis-agent/.env
+```
+
+### 4. Start API service
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now aegis-api
+sudo systemctl status aegis-api
+curl -s http://127.0.0.1:8080/health | python3 -m json.tool
+```
+
+### 5. Start Cloudflare Quick Tunnel (public HTTPS, no domain)
+
+```bash
+cd /opt/aegis-agent
+git pull
+sudo bash deploy/neevcloud/start-quick-tunnel.sh --install-service
+sleep 15
+cat /var/log/aegis-tunnel.url
+curl -s "$(cat /var/log/aegis-tunnel.url)/health"
+```
+
+If URL file is empty:
+
+```bash
+sudo journalctl -u cloudflared-quick -n 50 --no-pager | grep trycloudflare
+```
+
+### 6. Deploy Cloudflare Pages (from your laptop)
+
+```bash
+cd aegis-agent
+npx wrangler login
+
+# Bake tunnel URL so judges don't enter API URL manually
+AEGIS_DEFAULT_API=https://YOUR-TUNNEL.trycloudflare.com make pages-deploy
+```
+
+Note your Pages URL (e.g. `https://aegis-agent.pages.dev`). If CORS was a placeholder, update on VM:
+
+```bash
+sudo nano /opt/aegis-agent/.env   # CORS_ORIGINS=https://aegis-agent.pages.dev
+sudo systemctl restart aegis-api
+```
+
+### 7. Pre-demo warm-up
+
+```bash
+# On VM
+curl -s "$(cat /var/log/aegis-tunnel.url)/health"
+
+# From laptop
+curl -s https://YOUR-TUNNEL.trycloudflare.com/health
+```
+
+Open Pages URL → confirm green **API connected** badge → run all three demo cases.
+
+---
+
+## Cloudflare Pages commands (reference)
+
+```bash
+# One-time login
+npx wrangler login
+
+# Local preview of static UI
+make pages-dev
+
+# Generate web/config.js only (requires AEGIS_DEFAULT_API or existing config)
+make pages-config
+
+# Deploy UI (generates config + uploads web/)
+AEGIS_DEFAULT_API=https://your-tunnel.trycloudflare.com make pages-deploy
+
+# Manual deploy without Makefile
+AEGIS_DEFAULT_API=https://your-tunnel.trycloudflare.com bash scripts/generate-pages-config.sh
+npx wrangler pages deploy web --project-name=aegis-agent
+```
+
+---
+
+## NeevCloud VM operations (reference)
+
+```bash
+# API logs / restart
+sudo journalctl -u aegis-api -f
+sudo systemctl restart aegis-api
+
+# Tunnel logs / restart
+sudo journalctl -u cloudflared-quick -f
+sudo systemctl restart cloudflared-quick
+cat /var/log/aegis-tunnel.url
+
+# Pull code updates after git push
+cd /opt/aegis-agent
+sudo -u aegis git pull
+sudo -u aegis /opt/aegis-agent/.venv/bin/pip install -r requirements.txt
+sudo systemctl restart aegis-api
+
+# Re-ingest RAG fixtures
+curl -X POST http://127.0.0.1:8080/reingest
+```
+
+After VM reboot, tunnel URL may change — redeploy Pages:
+
+```bash
+# On VM: get new URL
+cat /var/log/aegis-tunnel.url
+
+# On laptop
+AEGIS_DEFAULT_API=https://NEW-TUNNEL.trycloudflare.com make pages-deploy
+```
+
+---
 
 ## Configuration
 
 | Variable | Purpose |
 |----------|---------|
 | `GOOGLE_API_KEY` | Shared key for both Gemini agents |
-| `GEMINI_MODEL` | Planner agent (default: `gemini-3.6-flash`) |
-| `GEMINI_PARANOID_MODEL` | Gatekeeper default — Pro (default: `gemini-3.1-pro-preview`) |
-| `GEMINI_PARANOID_FAST_MODEL` | Gatekeeper when Fast audit enabled (`gemini-3.7-flash`) |
-| `PARANOID_USE_VLLM` | Enable optional vLLM/NeevCloud endpoint (default: `false`) |
-| `OPENAI_API_KEY` | Optional fallback if vLLM is enabled |
+| `GEMINI_MODEL` | Planner (default: `gemini-3.6-flash`) |
+| `GEMINI_PARANOID_MODEL` | Gatekeeper default — Pro (`gemini-3.1-pro-preview`) |
+| `GEMINI_PARANOID_FAST_MODEL` | Gatekeeper when Fast audit enabled (`gemini-3.6-flash`) |
+| `CORS_ORIGINS` | Comma-separated UI origins, e.g. `https://aegis-agent.pages.dev` |
+| `PARANOID_USE_VLLM` | Optional vLLM endpoint (default: `false`) |
 | `RPC_URL` / `CHAIN_ID` / `PRIVATE_KEY` | Testnet broadcast (optional) |
 | `DEMO_MODE` | Offline heuristics when no API key |
 
-Without `PRIVATE_KEY`, approved txs return a deterministic **mock** hash after local simulation logic (or skip RPC if unreachable).
+Without `PRIVATE_KEY`, approved txs return a deterministic **mock** hash.
+
+---
 
 ## Project layout
 
 ```
 aegis-agent/
 ├── backend/
-│   ├── config.py
-│   ├── schemas.py
 │   ├── agents/          # Gemini planner + paranoid auditor
 │   ├── rag/             # Chroma + sample ABIs / invariants
 │   ├── execution/       # web3.py simulate / broadcast
 │   └── main.py          # FastAPI orchestrator
 ├── frontend/app.py      # Streamlit UI (local dev)
 ├── web/                 # Static UI → Cloudflare Pages
-├── deploy/neevcloud/    # NeevCloud CPU VM + Cloudflare Tunnel
+├── scripts/             # generate-pages-config.sh
+├── deploy/neevcloud/    # NeevCloud + tunnel deploy assets
+├── Makefile
 ├── wrangler.toml
 ├── .env.example
 └── requirements.txt
@@ -160,4 +304,4 @@ aegis-agent/
 
 ## Security note
 
-This is a hackathon / research prototype. Never point `PRIVATE_KEY` at a mainnet wallet. The Paranoid Agent reduces — but does not eliminate — LLM hallucination and prompt-injection risk.
+Hackathon / research prototype. Never point `PRIVATE_KEY` at a mainnet wallet. The Paranoid Agent reduces — but does not eliminate — LLM hallucination and prompt-injection risk.
