@@ -12,31 +12,82 @@ const STAGES = [
 
 const $ = (id) => document.getElementById(id);
 
+function bakedApiUrl() {
+  const url = window.AEGIS_CONFIG?.apiUrl?.trim();
+  if (!url || url.includes("YOUR-TUNNEL")) return "";
+  return url.replace(/\/$/, "");
+}
+
 function defaultApiUrl() {
-  const { hostname, origin, protocol } = window.location;
-  // Local dev
+  const baked = bakedApiUrl();
+  if (baked) return baked;
+  const { hostname } = window.location;
   if (hostname === "localhost" || hostname === "127.0.0.1") {
     return "http://localhost:8080";
   }
-  // Pages without proxy: user pastes trycloudflare / tunnel URL in the field
   return "";
 }
 
+function resolvedApiUrl() {
+  const baked = bakedApiUrl();
+  if (baked) return baked;
+  const saved = localStorage.getItem("aegis_api_url")?.trim();
+  if (saved) return saved.replace(/\/$/, "");
+  return defaultApiUrl();
+}
+
 function loadSettings() {
-  const saved = localStorage.getItem("aegis_api_url") || "";
-  const fallback = defaultApiUrl();
-  $("apiUrl").value = saved || fallback || "";
-  $("apiUrl").placeholder =
-    fallback || "https://xxxx.trycloudflare.com (from NeevCloud tunnel)";
+  const api = resolvedApiUrl();
+  $("apiUrl").value = api;
+  $("apiUrl").placeholder = bakedApiUrl()
+    ? "Preconfigured at deploy time"
+    : "https://xxxx.trycloudflare.com";
   $("query").value = DEMO_CASES[0];
+
+  const advanced = document.querySelector(".advanced");
+  if (bakedApiUrl() && advanced) {
+    advanced.open = false;
+  }
 }
 
 function saveApiUrl() {
-  localStorage.setItem("aegis_api_url", $("apiUrl").value.trim());
+  const val = $("apiUrl").value.trim();
+  if (val && val !== bakedApiUrl()) {
+    localStorage.setItem("aegis_api_url", val);
+  }
+}
+
+function getApiBase() {
+  return ($("apiUrl").value.trim() || resolvedApiUrl()).replace(/\/$/, "");
+}
+
+async function checkApiHealth() {
+  const el = $("apiStatus");
+  if (!el) return;
+  const api = getApiBase();
+  if (!api) {
+    el.textContent = "API URL not configured — set AEGIS_DEFAULT_API at deploy time";
+    el.className = "api-status bad";
+    return;
+  }
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(`${api}/health`, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (!res.ok) throw new Error(String(res.status));
+    const data = await res.json();
+    const gemini = data.gemini_configured ? "Gemini live" : "demo/offline";
+    el.textContent = `● API connected · ${gemini} · ${api.replace(/^https?:\/\//, "")}`;
+    el.className = "api-status ok";
+  } catch {
+    el.textContent = `● API unreachable at ${api.replace(/^https?:\/\//, "")} — check tunnel / CORS`;
+    el.className = "api-status bad";
+  }
 }
 
 async function post(path, body, timeoutMs = 120000) {
-  const api = $("apiUrl").value.trim().replace(/\/$/, "");
+  const api = getApiBase();
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -90,6 +141,7 @@ function renderPlanner(p) {
     <div class="kv"><strong>Target</strong><br><code class="mono">${p.target_contract}</code></div>
     <div class="kv"><strong>Args</strong><pre class="mono">${JSON.stringify(p.args, null, 2)}</pre></div>
     <div class="kv"><strong>Calldata</strong><br><code class="mono">${p.raw_calldata}</code></div>
+    <div class="kv"><strong>Gas / value</strong> ${p.gas_limit?.toLocaleString?.() ?? p.gas_limit} gas · ${p.value_wei} wei</div>
     <div class="kv"><strong>Reasoning</strong><br>${p.reasoning_path || "—"}</div>`;
 }
 
@@ -110,7 +162,7 @@ function renderAuditor(a) {
 
 function renderDispatch(ex, pipelineStatus) {
   if (pipelineStatus === "REJECTED") {
-    return '<p class="tag bad">Blocked by gatekeeper</p>';
+    return '<p class="tag bad">Blocked by gatekeeper — no broadcast attempted</p>';
   }
   if (!ex) return '<p class="muted">No execution</p>';
   return `
@@ -123,9 +175,9 @@ function renderDispatch(ex, pipelineStatus) {
 
 async function runPipeline() {
   saveApiUrl();
-  const api = $("apiUrl").value.trim();
+  const api = getApiBase();
   if (!api) {
-    alert("Set API URL to your Cloudflare tunnel (https://….trycloudflare.com)");
+    alert("API URL not configured. Redeploy with AEGIS_DEFAULT_API or set it under Advanced options.");
     return;
   }
   const query = $("query").value.trim();
@@ -138,7 +190,7 @@ async function runPipeline() {
   $("statusBar").classList.add("hidden");
   $("runBtn").disabled = true;
 
-  let proposal, audit, rag_context, execution, pipelineStatus;
+  let proposal, audit, execution, pipelineStatus;
 
   try {
     setStep(states, 0, { state: "running", icon: "▶", msg: "Gemini Flash planning…" });
@@ -164,7 +216,6 @@ async function runPipeline() {
       fast_audit: fastAudit,
     });
     audit = auditResp.audit;
-    rag_context = auditResp.rag_context;
     $("auditorBody").innerHTML = renderAuditor(audit);
     setStep(states, 1, {
       state: "done",
@@ -204,6 +255,7 @@ async function runPipeline() {
 document.querySelectorAll(".demo-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
     $("query").value = DEMO_CASES[Number(btn.dataset.demo)];
+    document.querySelector(".demo-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
   });
 });
 
@@ -211,3 +263,4 @@ $("runBtn").addEventListener("click", runPipeline);
 $("apiUrl").addEventListener("change", saveApiUrl);
 
 loadSettings();
+checkApiHealth();

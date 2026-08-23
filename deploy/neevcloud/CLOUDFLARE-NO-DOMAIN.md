@@ -83,15 +83,16 @@ sudo systemctl restart aegis-api
 
 ## Step 4 — Connect UI to API
 
-1. Open your Pages URL in the browser.
-2. In **API URL**, paste: `https://xxxx.trycloudflare.com` (from Step 2, no trailing slash).
-3. Run **Valid transfer** demo.
+The API URL is **baked in at deploy time** so judges don't need to configure anything:
 
-The URL is saved in browser `localStorage` for next visits.
+```bash
+# From your Mac — use your tunnel URL from Step 2
+AEGIS_DEFAULT_API=https://xxxx.trycloudflare.com make pages-deploy
+```
 
-### Optional: bake default API URL before deploy
+This writes `web/config.js` and deploys Pages. The UI shows a green **API connected** badge on load.
 
-Edit `web/app.js` → `defaultApiUrl()` and set your tunnel URL, then `make pages-deploy` again.
+Manual override (optional): open **Advanced options** on the Pages site and change API URL.
 
 ---
 

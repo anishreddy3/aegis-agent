@@ -83,7 +83,12 @@ make pages-deploy
 # or: npx wrangler pages deploy web --project-name=aegis-agent
 ```
 
-After deploy, open your Pages URL and set **API URL** to your hosted FastAPI (e.g. `https://api.yourdomain.com`).  
+After deploy, open your Pages URL — the API URL is preconfigured if you used `AEGIS_DEFAULT_API` (see [deploy/neevcloud/CLOUDFLARE-NO-DOMAIN.md](deploy/neevcloud/CLOUDFLARE-NO-DOMAIN.md)).
+
+```bash
+AEGIS_DEFAULT_API=https://your-tunnel.trycloudflare.com make pages-deploy
+```
+
 Add your Pages origin to `CORS_ORIGINS` in the API `.env`.
 
 Local preview: `make pages-dev`

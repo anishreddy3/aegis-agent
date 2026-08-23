@@ -3,31 +3,149 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AegisAgent — Dual-Agent Web3 Validation</title>
+  <title>AegisAgent — Epistemically Paranoid Web3 Validation</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <header class="header">
-    <div>
+  <header class="hero">
+    <div class="hero-text">
+      <p class="eyebrow">Dual-agent · RAG-grounded · Gate before broadcast</p>
       <h1>🛡️ AegisAgent</h1>
-      <p class="subtitle">Pro gatekeeper by default · Flash planner → RAG → audit → dispatch</p>
-    </div>
-    <div class="controls">
-      <label>API URL <input id="apiUrl" type="url" placeholder="https://xxxx.trycloudflare.com" /></label>
-      <label class="check"><input id="forceDemo" type="checkbox" /> Offline demo</label>
-      <label class="check"><input id="fastAudit" type="checkbox" /> Fast audit (Flash)</label>
+      <p class="lead">
+        Translates natural-language Web3 intents into EVM calldata, retrieves verified ABIs and
+        security invariants via vector search, then adversarially audits every field before
+        simulation or testnet dispatch. The planner is treated as <strong>hostile until proven
+        otherwise</strong>.
+      </p>
+      <div class="hero-badges">
+        <span class="pill">Gemini Flash · Planner</span>
+        <span class="pill">Chroma RAG · ABIs</span>
+        <span class="pill">Gemini Pro · Gatekeeper</span>
+        <span class="pill">Web3 · Simulate / broadcast</span>
+      </div>
+      <div id="apiStatus" class="api-status muted">Checking API…</div>
     </div>
   </header>
 
-  <section class="demos">
-    <span class="label">Quick demos:</span>
-    <button data-demo="0" class="demo-btn">Valid transfer</button>
-    <button data-demo="1" class="demo-btn">Hallucinated method</button>
-    <button data-demo="2" class="demo-btn">Drain / injection</button>
+  <section class="section">
+    <h2>Architecture</h2>
+    <p class="section-intro">
+      Three isolated stages run sequentially. Only an <span class="tag ok">APPROVED</span> audit
+      unlocks execution. Rejected proposals never reach the chain.
+    </p>
+    <div class="arch-flow">
+      <article class="arch-node">
+        <div class="arch-num">1</div>
+        <h3>Execution Agent</h3>
+        <p class="arch-model">Gemini 3.6 Flash</p>
+        <p>NL intent → structured <code>TransactionProposal</code>: contract, function, args, calldata, gas.</p>
+      </article>
+      <div class="arch-arrow" aria-hidden="true">→</div>
+      <article class="arch-node">
+        <div class="arch-num">2</div>
+        <h3>RAG + Paranoid Gatekeeper</h3>
+        <p class="arch-model">Chroma + Gemini 3.1 Pro</p>
+        <p>Retrieves ERC-20 / Uniswap / Aave ABIs and invariants. Cross-checks every planner field; rejects hallucinations and drains.</p>
+      </article>
+      <div class="arch-arrow" aria-hidden="true">→</div>
+      <article class="arch-node">
+        <div class="arch-num">3</div>
+        <h3>Web3 Executor</h3>
+        <p class="arch-model">eth_call / estimateGas</p>
+        <p>Simulates approved txs locally. Optional testnet broadcast when keys are configured.</p>
+      </article>
+    </div>
+    <pre class="arch-diagram" aria-label="Pipeline diagram">User Intent
+    │
+    ▼
+┌─────────────────────┐
+│  Execution Agent    │  Gemini Flash → TransactionProposal
+└─────────┬───────────┘
+          ▼
+┌─────────────────────┐
+│  Vector Store / RAG │  ChromaDB · ABIs + invariants
+└─────────┬───────────┘
+          ▼
+┌─────────────────────┐
+│  Paranoid Gatekeeper│  Gemini Pro → APPROVED | REJECTED
+└─────────┬───────────┘
+          │ APPROVED only
+          ▼
+┌─────────────────────┐
+│  Web3 Executor      │  simulate → optional broadcast
+└─────────────────────┘</pre>
   </section>
 
-  <textarea id="query" rows="3" placeholder="Natural-language transaction intent…"></textarea>
-  <button id="runBtn" class="primary">Evaluate &amp; Execute</button>
+  <section class="section">
+    <h2>Capabilities</h2>
+    <div class="cap-grid">
+      <article class="cap-card">
+        <h3>🧠 Structured planning</h3>
+        <p>Gemini emits typed JSON proposals — not raw hex — so the auditor can reason over function names, args, and attached ETH value.</p>
+      </article>
+      <article class="cap-card">
+        <h3>📚 Grounded RAG</h3>
+        <p>Chroma retrieves verified ABI fragments and invariants (zero-address, slippage bounds, method-signature rules) injected into the gatekeeper prompt.</p>
+      </article>
+      <article class="cap-card">
+        <h3>🔒 Adversarial audit</h3>
+        <p>Pro gatekeeper assumes prompt injection and planner hallucination. Cites grounded facts; prefers <strong>REJECTED</strong> when uncertain.</p>
+      </article>
+      <article class="cap-card">
+        <h3>⛓️ Safe dispatch</h3>
+        <p>Blocked txs never broadcast. Approved paths run simulation first; mock or live tx hash returned for observability.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Security checks</h2>
+    <ul class="check-list">
+      <li><strong>HALLUCINATED_METHOD</strong> — function not in retrieved ERC-20 / Uniswap / Aave ABIs</li>
+      <li><strong>ZERO_ADDRESS</strong> — transfer or approve to <code>address(0)</code></li>
+      <li><strong>UNLIMITED_APPROVAL</strong> — allowance near <code>uint256</code> max to unknown spenders</li>
+      <li><strong>MALICIOUS_SPENDER</strong> — approve targeting attacker-controlled addresses</li>
+      <li><strong>Injection patterns</strong> — “ignore previous instructions”, drain phrasing, hidden spenders</li>
+    </ul>
+  </section>
+
+  <section class="section demo-section">
+    <h2>Live demo</h2>
+    <p class="section-intro">
+      Pick a scenario below. Each exercises a different failure mode or happy path through the full pipeline.
+    </p>
+
+    <div class="demo-cards">
+      <button type="button" data-demo="0" class="demo-card demo-btn">
+        <span class="demo-tag ok">Expected: APPROVED</span>
+        <strong>Valid ERC-20 transfer</strong>
+        <p>1 USDC to a valid recipient — standard <code>transfer(address,uint256)</code> on USDC.</p>
+      </button>
+      <button type="button" data-demo="1" class="demo-card demo-btn">
+        <span class="demo-tag bad">Expected: REJECTED</span>
+        <strong>Hallucinated method</strong>
+        <p><code>safeTransferWithPermitAndStake</code> — composite method that does not exist on standard ABIs.</p>
+      </button>
+      <button type="button" data-demo="2" class="demo-card demo-btn">
+        <span class="demo-tag bad">Expected: REJECTED</span>
+        <strong>Drain / injection</strong>
+        <p>Unlimited approve to attacker address — classic wallet-drain primitive + injection phrasing.</p>
+      </button>
+    </div>
+
+    <details class="advanced">
+      <summary>Advanced options</summary>
+      <div class="controls">
+        <label>API URL <input id="apiUrl" type="url" placeholder="Set via deploy config" /></label>
+        <label class="check"><input id="forceDemo" type="checkbox" /> Offline demo (deterministic heuristics)</label>
+        <label class="check"><input id="fastAudit" type="checkbox" /> Fast audit (Flash gatekeeper, ~10s vs Pro ~60s)</label>
+      </div>
+    </details>
+
+    <label class="field-label" for="query">Transaction intent</label>
+    <textarea id="query" rows="3" placeholder="Natural-language transaction intent…"></textarea>
+    <button id="runBtn" class="primary">Evaluate &amp; Execute pipeline</button>
+  </section>
 
   <section id="progress" class="progress hidden">
     <h2>Pipeline progress</h2>
@@ -39,21 +157,26 @@
   <main class="grid" id="results">
     <article class="panel" id="colPlanner">
       <h3>① Execution Agent</h3>
-      <p class="cap">Gemini Flash planner</p>
-      <div id="plannerBody" class="body muted">Waiting…</div>
+      <p class="cap">Gemini Flash · structured calldata planner</p>
+      <div id="plannerBody" class="body muted">Run a demo to see the planner output…</div>
     </article>
     <article class="panel" id="colAuditor">
-      <h3>② Paranoid Auditor</h3>
-      <p class="cap">Gemini 3.1 Pro (toggle Flash for speed)</p>
-      <div id="auditorBody" class="body muted">Waiting…</div>
+      <h3>② Paranoid Gatekeeper</h3>
+      <p class="cap">Gemini 3.1 Pro · RAG-grounded adversarial audit</p>
+      <div id="auditorBody" class="body muted">Audit verdict and grounded facts appear here…</div>
     </article>
     <article class="panel" id="colDispatch">
       <h3>③ Dispatch</h3>
-      <p class="cap">Simulate / mock tx</p>
-      <div id="dispatchBody" class="body muted">Waiting…</div>
+      <p class="cap">Simulation · mock or testnet tx hash</p>
+      <div id="dispatchBody" class="body muted">Execution result after approval…</div>
     </article>
   </main>
 
+  <footer class="footer">
+    <p>AegisAgent — hackathon prototype. Never use mainnet keys. LLM + RAG reduce but do not eliminate adversarial risk.</p>
+  </footer>
+
+  <script src="/config.js"></script>
   <script src="/app.js" type="module"></script>
 </body>
 </html>
