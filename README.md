@@ -1,30 +1,42 @@
-# AegisAgent — Epistemically Paranoid Autonomous Agent for Web3 Tx Validation
+# AegisAgent — Epistemically Paranoid Gate for WDK Agent Wallets
 
-Dual-agent pipeline that translates natural-language intents into EVM calldata, retrieves verified ABIs/invariants via RAG, adversarially audits the proposal, and only then simulates or broadcasts to a testnet.
+Dual-agent pipeline that translates natural-language intents into EVM calldata, retrieves verified ABIs/invariants via RAG, adversarially audits every field, and only then emits a **[Tether WDK](https://docs.wdk.tether.io/)**-ready sign payload — rejected transactions never reach `@tetherto/wdk` `sendTransaction`.
+
+**Aleph Hackathon · WDK Track** — audit first, WDK signs second.
 
 ```
 User Intent
     │
     ▼
 ┌─────────────────────┐
-│  Execution Agent    │  Gemini 3.6 Flash (structured TransactionProposal)
+│  Execution Agent    │  Gemini 3.6 Flash → TransactionProposal
 └─────────┬───────────┘
-          │
           ▼
 ┌─────────────────────┐
 │  Vector Store / RAG │  ChromaDB · ABIs + security invariants
 └─────────┬───────────┘
-          │
           ▼
 ┌─────────────────────┐
-│  Paranoid Gatekeeper│  Gemini 3.1 Pro (adversarial AuditVerdict)
+│  Paranoid Gatekeeper│  Gemini 3.1 Pro → APPROVED | REJECTED
 └─────────┬───────────┘
           │ APPROVED only
           ▼
 ┌─────────────────────┐
-│  Web3 Executor      │  eth_call / estimateGas → optional broadcast
+│  WDK Sign Layer     │  wdk_sign_request + registerPolicy hook
+└─────────┬───────────┘
+          ▼
+┌─────────────────────┐
+│  Web3 Executor      │  simulate / optional testnet broadcast
 └─────────────────────┘
 ```
+
+| WDK integration | What it does |
+|-----------------|--------------|
+| **A — API payload** | `/pipeline/execute` returns `wdk_sign_request` after APPROVED |
+| **B — Node bridge** | `integrations/wdk/sign-approved.mjs` → `@tetherto/wdk` simulate/sign |
+| **C — Policy hook** | `integrations/wdk/aegis-policy.mjs` → `registerPolicy` ALLOW/DENY |
+
+→ Full WDK guide: **[integrations/wdk/README.md](integrations/wdk/README.md)**
 
 ## Quick start (local)
 
@@ -84,18 +96,63 @@ curl -s -X POST http://localhost:8080/pipeline/plan \
 | `POST` | `/evaluate-and-execute` | `{ "query": "...", "force_demo": false }` |
 | `POST` | `/pipeline/plan` | `{ "query": "..." }` |
 | `POST` | `/pipeline/audit` | `{ "query", "proposal", "fast_audit": false }` |
-| `POST` | `/pipeline/execute` | `{ "proposal" }` |
+| `POST` | `/pipeline/execute` | `{ "proposal" }` → `execution` + **`wdk_sign_request`** if sim OK |
 | `POST` | `/reingest` | Rebuild Chroma from fixtures |
+
+`GET /health` includes `"wdk_integration": true` when the WDK payload module is loaded.
+
+### WDK bridge (Node.js)
+
+Requires Node 20+. Uses [`@tetherto/wdk`](https://docs.wdk.tether.io/) + [`@tetherto/wdk-wallet-evm`](https://docs.wdk.tether.io/sdk/get-started/).
+
+```bash
+# Terminal 1 — API (if not already running)
+uvicorn backend.main:app --host 0.0.0.0 --port 8080
+
+# Terminal 2 — full Aegis → WDK pipeline
+cd integrations/wdk
+npm install
+npm run policy-demo                                    # unit test policy logic
+AEGIS_API_URL=http://127.0.0.1:8080 npm run sign-approved   # live pipeline + simulate
+```
+
+Optional env (see `.env.example`):
+
+| Variable | Purpose |
+|----------|---------|
+| `AEGIS_API_URL` | FastAPI base URL for the bridge script |
+| `WDK_EVM_RPC` | EVM RPC for WDK (default: Base Sepolia) |
+| `WDK_TEST_SEED_PHRASE` | 12/24-word seed; ephemeral if unset |
+
+Example **`wdk_sign_request`** (Option A — also shown in Pages UI under Dispatch):
+
+```json
+{
+  "wdk_ready": true,
+  "chain": "evm",
+  "blockchain": "ethereum",
+  "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+  "data": "0xa9059cbb…",
+  "value": "0",
+  "gas": 65000,
+  "chain_id": 84532,
+  "gatekeeper": "APPROVED",
+  "approval_token": "8a27147d…",
+  "policy_hint": { "operation": "sendTransaction" }
+}
+```
+
+On **REJECTED** audits the UI shows *“WDK sign never invoked”* — no payload is emitted.
 
 ---
 
 ## Demo cases (built into the UI)
 
-| Case | Expected gate |
-|------|----------------|
-| Valid ERC-20 transfer | **APPROVED** → mock/sim tx hash |
-| Hallucinated `safeTransferWithPermitAndStake` | **REJECTED** · HALLUCINATED_METHOD |
-| Malicious unlimited approve / drain injection | **REJECTED** · MALICIOUS_SPENDER / UNLIMITED_APPROVAL |
+| Case | Expected gate | WDK |
+|------|----------------|-----|
+| Valid ERC-20 transfer | **APPROVED** → mock/sim tx hash | **`wdk_sign_request` emitted** |
+| Hallucinated `safeTransferWithPermitAndStake` | **REJECTED** · HALLUCINATED_METHOD | **Blocked — no WDK payload** |
+| Malicious unlimited approve / drain injection | **REJECTED** · MALICIOUS_SPENDER | **Blocked — no WDK payload** |
 
 With `DEMO_MODE=false` and a valid `GOOGLE_API_KEY`:
 
@@ -281,23 +338,43 @@ AEGIS_DEFAULT_API=https://NEW-TUNNEL.trycloudflare.com make pages-deploy
 
 Without `PRIVATE_KEY`, approved txs return a deterministic **mock** hash.
 
-## WDK Track (Tether Agent Wallets)
+---
 
-AegisAgent gates **[WDK](https://docs.wdk.tether.io/)** agent wallets: audit first, sign second.
+## Tether WDK integration (Aleph WDK Track)
 
-| Layer | Location |
-|-------|----------|
-| **A** API `wdk_sign_request` | `backend/integrations/wdk_payload.py` |
-| **B** Node bridge | `integrations/wdk/sign-approved.mjs` |
-| **C** `registerPolicy` hook | `integrations/wdk/aegis-policy.mjs` |
+**Problem:** [WDK](https://docs.wdk.tether.io/overview/about/) lets AI agents hold self-custodial wallets and sign transactions. A hallucinated `function_name` or prompt-injection in user text can drain funds in one `sendTransaction`.
+
+**Solution:** AegisAgent is a **mandatory pre-sign gate** — the planner is treated as hostile until RAG-grounded audit approves. Only then does the system export calldata for WDK and register a **`registerPolicy`** rule ([docs](https://docs.wdk.tether.io/sdk/core-module/api-reference/)) that ALLOWs exactly that bundle.
+
+### Three layers
+
+| Layer | Path | Description |
+|-------|------|-------------|
+| **A** | `backend/integrations/wdk_payload.py` | Builds `wdk_sign_request` + `approval_token` fingerprint |
+| **B** | `integrations/wdk/sign-approved.mjs` | Calls Aegis API → WDK `getAccount` → `simulate.sendTransaction` |
+| **C** | `integrations/wdk/aegis-policy.mjs` | `wdk.registerPolicy()` — DENY tampered calldata, ALLOW Aegis-approved |
+
+### Quick test
 
 ```bash
 cd integrations/wdk && npm install
 npm run policy-demo
 AEGIS_API_URL=http://127.0.0.1:8080 npm run sign-approved
+# Expected: Gatekeeper APPROVED → simulate.sendTransaction → ALLOW
 ```
 
-Full guide: **[integrations/wdk/README.md](integrations/wdk/README.md)**
+### Demo video flow (2–3 min)
+
+1. Pages UI → **Valid transfer** → show **WDK sign request** JSON in Dispatch panel  
+2. **Hallucinated method** → REJECTED → no WDK payload  
+3. (Optional) terminal `npm run sign-approved` → `simulate.sendTransaction → ALLOW`
+
+### Hackathon submission blurb
+
+> **AegisAgent** — paranoid pre-sign gate for **Tether WDK** agent wallets. NL intent → Gemini planner → Chroma RAG → Gemini Pro audit → **`wdk_sign_request` + `registerPolicy`** only if APPROVED. Blocks hallucinated methods, unlimited approvals, and injection patterns.  
+> Tracks: **WDK** + General. Stack: FastAPI, dual Gemini, Chroma, `@tetherto/wdk`, Cloudflare Pages + NeevCloud.
+
+→ Detailed WDK docs: **[integrations/wdk/README.md](integrations/wdk/README.md)**
 
 ---
 
@@ -307,6 +384,7 @@ Full guide: **[integrations/wdk/README.md](integrations/wdk/README.md)**
 aegis-agent/
 ├── backend/
 │   ├── agents/          # Gemini planner + paranoid auditor
+│   ├── integrations/    # wdk_payload.py (WDK sign request builder)
 │   ├── rag/             # Chroma + sample ABIs / invariants
 │   ├── execution/       # web3.py simulate / broadcast
 │   └── main.py          # FastAPI orchestrator
