@@ -102,7 +102,10 @@ sudo nano /opt/aegis-agent/.env          # GOOGLE_API_KEY, CORS_ORIGINS
 sudo systemctl enable --now aegis-api
 ```
 
-Then expose HTTPS with **Cloudflare Tunnel** (`deploy/neevcloud/cloudflared-config.yml.example`) and point the Pages UI at your API URL.
+Then expose HTTPS with **Cloudflare Tunnel** — see:
+
+- **No domain:** [deploy/neevcloud/CLOUDFLARE-NO-DOMAIN.md](deploy/neevcloud/CLOUDFLARE-NO-DOMAIN.md) (Quick Tunnel + Pages — **start here**)
+- **Custom domain:** [deploy/neevcloud/README.md](deploy/neevcloud/README.md) Part 2 (named tunnel)
 
 Included in `deploy/neevcloud/`:
 

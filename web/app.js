@@ -12,9 +12,22 @@ const STAGES = [
 
 const $ = (id) => document.getElementById(id);
 
+function defaultApiUrl() {
+  const { hostname, origin, protocol } = window.location;
+  // Local dev
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return "http://localhost:8080";
+  }
+  // Pages without proxy: user pastes trycloudflare / tunnel URL in the field
+  return "";
+}
+
 function loadSettings() {
   const saved = localStorage.getItem("aegis_api_url") || "";
-  $("apiUrl").value = saved || "http://localhost:8080";
+  const fallback = defaultApiUrl();
+  $("apiUrl").value = saved || fallback || "";
+  $("apiUrl").placeholder =
+    fallback || "https://xxxx.trycloudflare.com (from NeevCloud tunnel)";
   $("query").value = DEMO_CASES[0];
 }
 
@@ -110,6 +123,11 @@ function renderDispatch(ex, pipelineStatus) {
 
 async function runPipeline() {
   saveApiUrl();
+  const api = $("apiUrl").value.trim();
+  if (!api) {
+    alert("Set API URL to your Cloudflare tunnel (https://….trycloudflare.com)");
+    return;
+  }
   const query = $("query").value.trim();
   if (!query) return alert("Enter a transaction intent");
 
