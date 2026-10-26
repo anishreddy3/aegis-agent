@@ -163,6 +163,26 @@ Set `DEMO_MODE=true` (or **Offline demo** in the UI) for deterministic heuristic
 
 ---
 
+## Testing
+
+Offline demo heuristics (no Gemini key required):
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+DEMO_MODE=true python -m pytest tests/ -q
+# or: make test
+```
+
+These tests cover the three README demo cases: valid ERC-20 transfer (APPROVED), hallucinated method (REJECTED), and malicious unlimited approve (REJECTED).
+
+WDK policy unit checks:
+
+```bash
+cd integrations/wdk && npm install && npm run policy-demo
+```
+
 ## Production deploy — NeevCloud + Cloudflare (no custom domain)
 
 Recommended hackathon path: **API on NeevCloud CPU VM**, **UI on Cloudflare Pages**, **HTTPS via Quick Tunnel** (`*.trycloudflare.com`).
