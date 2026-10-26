@@ -4,7 +4,11 @@
 # Set default API URL for judges (no manual entry):
 #   AEGIS_DEFAULT_API=https://your-tunnel.trycloudflare.com make pages-deploy
 
-.PHONY: pages-config pages-deploy pages-dev
+.PHONY: pages-config pages-deploy pages-dev test
+
+test:
+	DEMO_MODE=true python -m pytest tests/ -q
+
 
 pages-config:
 	bash scripts/generate-pages-config.sh
